@@ -2,9 +2,10 @@
 //  FireplaceAudioController.swift
 //  tinyFire
 //
-//  Procedural hearth ambience.
-//  Layers: warm air roar + mid hiss + irregular wood ticks/pops.
-//  Crackles bypass the roar lowpass so snaps stay audible.
+//  Hybrid hearth ambience:
+//  - Seamless recorded campfire loop (CC0) as the bed
+//  - Sparse procedural wood pops layered on top
+//  Heat scales bed gain / crackle density; mutes when flame is hidden.
 //
 
 import AVFoundation
@@ -15,6 +16,8 @@ import Foundation
 final class FireplaceAudioController: ObservableObject {
     private static let enabledKey = "sound.enabled"
     private static let volumeKey = "sound.volume"
+    private static let loopResource = "campfire_loop"
+    private static let loopExt = "caf"
 
     @Published var isEnabled: Bool {
         didSet {
@@ -37,12 +40,19 @@ final class FireplaceAudioController: ObservableObject {
     }
 
     private let engine = AVAudioEngine()
-    private var sourceNode: AVAudioSourceNode?
+    private let player = AVAudioPlayerNode()
+    private let bedEQ = AVAudioUnitEQ(numberOfBands: 1)
+    private var crackleNode: AVAudioSourceNode?
+    private var loopBuffer: AVAudioPCMBuffer?
     private var started = false
+    private var loopScheduled = false
 
-    private let state = AudioRenderState()
+    private let crackleState = CrackleRenderState()
     private var lastSnapshot = FireSnapshot.extinguished
     private var panelAudible = true
+
+    /// Smoothed bed gain applied on the audio thread via player.volume.
+    private var displayedBedGain: Float = 0
 
     init() {
         if UserDefaults.standard.object(forKey: Self.enabledKey) == nil {
@@ -67,16 +77,25 @@ final class FireplaceAudioController: ObservableObject {
         applyTargets()
         do {
             try engine.start()
+            startLoopIfNeeded()
         } catch {
             started = false
         }
     }
 
     func stop() {
+        player.stop()
+        loopScheduled = false
         engine.stop()
-        if let sourceNode {
-            engine.detach(sourceNode)
-            self.sourceNode = nil
+        if let crackleNode {
+            engine.detach(crackleNode)
+            self.crackleNode = nil
+        }
+        if engine.attachedNodes.contains(player) {
+            engine.detach(player)
+        }
+        if engine.attachedNodes.contains(bedEQ) {
+            engine.detach(bedEQ)
         }
         started = false
     }
@@ -87,15 +106,32 @@ final class FireplaceAudioController: ObservableObject {
         applyTargets()
         if !engine.isRunning, started {
             try? engine.start()
+            startLoopIfNeeded()
         }
     }
 
     private func installGraph() {
         let main = engine.mainMixerNode
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
-        let shared = state
+        let sampleRate = 44_100.0
+        let mono = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 
-        let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
+        // Low-shelf / lowpass feel: darker when cool, more open when hot.
+        bedEQ.bands[0].filterType = .lowPass
+        bedEQ.bands[0].frequency = 4_800
+        bedEQ.bands[0].bandwidth = 0.8
+        bedEQ.bands[0].gain = 0
+        bedEQ.bands[0].bypass = false
+        bedEQ.globalGain = 0
+
+        engine.attach(player)
+        engine.attach(bedEQ)
+        engine.connect(player, to: bedEQ, format: mono)
+        engine.connect(bedEQ, to: main, format: mono)
+
+        loopBuffer = Self.loadLoopBuffer(format: mono)
+
+        let shared = crackleState
+        let node = AVAudioSourceNode(format: mono) { _, _, frameCount, audioBufferList -> OSStatus in
             let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
             guard let buf = abl.first?.mData?.assumingMemoryBound(to: Float.self) else {
                 return noErr
@@ -103,26 +139,54 @@ final class FireplaceAudioController: ObservableObject {
             shared.render(into: buf, frameCount: Int(frameCount))
             return noErr
         }
-
         engine.attach(node)
-        engine.connect(node, to: main, format: format)
+        engine.connect(node, to: main, format: mono)
+        crackleNode = node
+
+        player.volume = 0
         main.outputVolume = 1
-        sourceNode = node
+    }
+
+    private func startLoopIfNeeded() {
+        guard let buffer = loopBuffer, !loopScheduled else { return }
+        player.scheduleBuffer(buffer, at: nil, options: [.loops])
+        if !player.isPlaying {
+            player.play()
+        }
+        loopScheduled = true
     }
 
     private func applyTargets() {
         let heat = Self.heat(for: lastSnapshot)
         let master = (isEnabled && panelAudible) ? Float(volume) : 0
 
-        // Bed present; crackles sparse.
-        let bed = master * (0.38 + heat * 0.55)
-        // Mean seconds between crackles (exponential waits around this).
-        // 微火 ~10s · 中火 ~5s · 烈火 ~2s
-        let tickGap = max(2.0, 12.0 - heat * 10.0)
-        let popBias = 0.07 + heat * 0.14
+        // Recorded bed carries most of the character.
+        let bed = master * (0.22 + heat * 0.78)
+        // Extra pops stay sparse — loop already crackles.
+        let tickGap = max(2.4, 14.0 - heat * 10.5)
+        let popBias = 0.05 + heat * 0.12
         let activity = heat
 
-        state.setTargets(bedGain: bed, tickGapSeconds: tickGap, popBias: popBias, activity: activity)
+        // Open the lowpass as the fire grows (cooler = darker / quieter highs).
+        let cutoff = 1_600 + heat * 5_200
+        bedEQ.bands[0].frequency = cutoff
+
+        displayedBedGain += (bed - displayedBedGain) * 0.35
+        player.volume = displayedBedGain
+
+        crackleState.setTargets(
+            crackleGain: master * (0.10 + heat * 0.28),
+            tickGapSeconds: tickGap,
+            popBias: popBias,
+            activity: activity
+        )
+
+        if started, engine.isRunning {
+            startLoopIfNeeded()
+            if master > 0.001, !player.isPlaying {
+                player.play()
+            }
+        }
     }
 
     private static func heat(for snap: FireSnapshot) -> Float {
@@ -136,45 +200,73 @@ final class FireplaceAudioController: ObservableObject {
             return Float(0.18 + pow(i, 0.65) * 0.82)
         }
     }
+
+    private static func loadLoopBuffer(format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        guard let url = Bundle.main.url(forResource: loopResource, withExtension: loopExt) else {
+            return nil
+        }
+        do {
+            let file = try AVAudioFile(forReading: url)
+            let frameCount = AVAudioFrameCount(file.length)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frameCount) else {
+                return nil
+            }
+            try file.read(into: buffer)
+
+            // Convert to engine mono format if needed.
+            if file.processingFormat == format {
+                return buffer
+            }
+            guard let converter = AVAudioConverter(from: file.processingFormat, to: format),
+                  let converted = AVAudioPCMBuffer(
+                    pcmFormat: format,
+                    frameCapacity: AVAudioFrameCount(
+                        Double(frameCount) * format.sampleRate / file.processingFormat.sampleRate
+                    ) + 32
+                  )
+            else {
+                return buffer
+            }
+            var error: NSError?
+            var supplied = false
+            converter.convert(to: converted, error: &error) { _, outStatus in
+                if supplied {
+                    outStatus.pointee = .endOfStream
+                    return nil
+                }
+                supplied = true
+                outStatus.pointee = .haveData
+                return buffer
+            }
+            return error == nil ? converted : buffer
+        } catch {
+            return nil
+        }
+    }
 }
 
-// MARK: - Audio thread
+// MARK: - Sparse procedural crackles (audio thread)
 
-private final class AudioRenderState: @unchecked Sendable {
+private final class CrackleRenderState: @unchecked Sendable {
     private let lock = NSLock()
-    private var targetBed: Float = 0
-    private var targetTickGap: Float = 1.2
-    private var targetPopBias: Float = 0.12
+    private var targetGain: Float = 0
+    private var targetTickGap: Float = 5
+    private var targetPopBias: Float = 0.1
     private var targetActivity: Float = 0
 
-    private var bedGain: Float = 0
-    private var tickGap: Float = 1.2
-    private var popBias: Float = 0.12
+    private var crackleGain: Float = 0
+    private var tickGap: Float = 5
+    private var popBias: Float = 0.1
     private var activity: Float = 0
 
-    // Noise / filter memory
-    private var brown: Float = 0
-    private var pink0: Float = 0
-    private var pink1: Float = 0
-    private var pink2: Float = 0
-    private var roarLP: Float = 0
-    private var hissLP: Float = 0
-    private var flutterPhase: Float = 0
-
-    // Event scheduler (samples until next crackle attempt) — ~0.55s before first
-    private var samplesUntilEvent: Int = 24_000
+    private var samplesUntilEvent: Int = 36_000
     private var followUpsLeft: Int = 0
+    private var voices: [CrackleVoice] = [CrackleVoice(), CrackleVoice(), CrackleVoice()]
+    private var rngState: UInt64 = 0xC0FF_EE42_F1A5_BEEF
 
-    // Active transient voices (up to 3 overlapping snaps)
-    private var voices: [CrackleVoice] = [
-        CrackleVoice(), CrackleVoice(), CrackleVoice()
-    ]
-
-    private var rngState: UInt64 = 0xA5A5_F1A5_C0DE_BEEF
-
-    func setTargets(bedGain: Float, tickGapSeconds: Float, popBias: Float, activity: Float) {
+    func setTargets(crackleGain: Float, tickGapSeconds: Float, popBias: Float, activity: Float) {
         lock.lock()
-        targetBed = bedGain
+        targetGain = crackleGain
         targetTickGap = tickGapSeconds
         targetPopBias = popBias
         targetActivity = activity
@@ -183,63 +275,38 @@ private final class AudioRenderState: @unchecked Sendable {
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
         lock.lock()
-        let tgBed = targetBed
+        let tgGain = targetGain
         let tgGap = targetTickGap
         let tgPop = targetPopBias
         let tgAct = targetActivity
         lock.unlock()
 
-        let smooth: Float = 1.0 - expf(-1.0 / (0.04 * 44_100))
+        let smooth: Float = 1.0 - expf(-1.0 / (0.05 * 44_100))
 
         for i in 0..<frameCount {
-            bedGain += (tgBed - bedGain) * smooth
+            crackleGain += (tgGain - crackleGain) * smooth
             tickGap += (tgGap - tickGap) * smooth
             popBias += (tgPop - popBias) * smooth
             activity += (tgAct - activity) * smooth
 
             let white = nextWhite()
 
-            // --- Bed: combustion air (brown) + soft hiss (pink) ---
-            brown = brown * 0.996 + white * 0.004
-            // Paul Kellet pink-ish
-            pink0 = 0.99765 * pink0 + white * 0.0990460
-            pink1 = 0.96300 * pink1 + white * 0.2965164
-            pink2 = 0.57000 * pink2 + white * 1.0526913
-            let pink = pink0 + pink1 + pink2 + white * 0.1848
-
-            // Slow amplitude flutter (flame breathing), ~0.15–0.4 Hz
-            flutterPhase += (0.00002 + activity * 0.00003)
-            if flutterPhase > 1 { flutterPhase -= 1 }
-            let flutter = 0.88 + 0.12 * sinf(flutterPhase * 2 * .pi)
-
-            var roar = brown * 4.2
-            roarLP = roarLP * 0.97 + roar * 0.03
-            roar = roarLP
-
-            var hiss = pink * 0.07
-            hissLP = hissLP * 0.86 + hiss * 0.14
-            hiss = hissLP * (0.30 + activity * 0.55)
-
-            let bed = (roar * 0.68 + hiss) * flutter * bedGain
-
-            // --- Scheduler: occasional crackles with quiet spells ---
-            if activity > 0.02 {
+            if activity > 0.02, crackleGain > 0.001 {
                 samplesUntilEvent -= 1
                 if samplesUntilEvent <= 0 {
                     triggerCrackle(isFollowUp: followUpsLeft > 0)
                     if followUpsLeft > 0 {
                         followUpsLeft -= 1
-                        // Soft double: ~360–800 ms
-                        samplesUntilEvent = Int(16_000 + nextFloat() * 20_000)
+                        samplesUntilEvent = Int(18_000 + nextFloat() * 22_000)
                     } else {
                         scheduleNextGap()
-                        if nextFloat() < 0.10 + activity * 0.08 {
+                        if nextFloat() < 0.08 + activity * 0.06 {
                             followUpsLeft = 1
                         }
                     }
                 }
             } else {
-                samplesUntilEvent = max(samplesUntilEvent, 32_000)
+                samplesUntilEvent = max(samplesUntilEvent, 40_000)
                 followUpsLeft = 0
             }
 
@@ -248,19 +315,17 @@ private final class AudioRenderState: @unchecked Sendable {
                 crackle += voices[v].tick(white: white)
             }
 
-            // Loud enough to hear over the bed, without needle HF.
-            var sample = bed + crackle * (0.55 + activity * 0.35)
-            sample = tanhf(sample * 1.12)
+            var sample = crackle * crackleGain
+            sample = tanhf(sample * 1.05)
             buffer[i] = sample
         }
     }
 
     private func scheduleNextGap() {
-        let mean = max(2.0, tickGap)
+        let mean = max(2.2, tickGap)
         let u = max(0.0001, nextFloat())
         let seconds = -logf(u) * mean
-        // Floor ~1.1s; cap ~16s so waits aren't endless.
-        let clamped = min(16.0, max(1.1, seconds))
+        let clamped = min(18.0, max(1.4, seconds))
         samplesUntilEvent = Int(clamped * 44_100)
     }
 
@@ -271,20 +336,18 @@ private final class AudioRenderState: @unchecked Sendable {
 
         let bigPop = !isFollowUp && nextFloat() < popBias
         if bigPop {
-            // Woody pop — warmer body, moderate presence.
             voices[idx].trigger(
-                amplitude: 0.55 + nextFloat() * 0.35,
-                decay: 0.990 + nextFloat() * 0.005,
-                brightness: 0.32 + nextFloat() * 0.18,
-                thump: 0.50 + nextFloat() * 0.30
+                amplitude: 0.48 + nextFloat() * 0.32,
+                decay: 0.991 + nextFloat() * 0.004,
+                brightness: 0.30 + nextFloat() * 0.16,
+                thump: 0.45 + nextFloat() * 0.28
             )
         } else {
-            // Soft mid crackle — audible, not a HF tick.
             voices[idx].trigger(
-                amplitude: 0.32 + nextFloat() * 0.32,
-                decay: 0.968 + nextFloat() * 0.018,
-                brightness: 0.38 + nextFloat() * 0.22,
-                thump: 0.22 + nextFloat() * 0.22
+                amplitude: 0.26 + nextFloat() * 0.28,
+                decay: 0.970 + nextFloat() * 0.016,
+                brightness: 0.36 + nextFloat() * 0.20,
+                thump: 0.18 + nextFloat() * 0.20
             )
         }
     }
@@ -302,7 +365,6 @@ private final class AudioRenderState: @unchecked Sendable {
     }
 }
 
-/// One overlapping wood snap / pop.
 private struct CrackleVoice {
     var active = false
     var env: Float = 0
@@ -333,19 +395,14 @@ private struct CrackleVoice {
             return 0
         }
 
-        // Mid-focused crackle: some bite, rolled-off extremes.
         let one: Float = 1
         let shaped: Float = white * brightness + (one - brightness) * lp
         lp = lp * 0.84 + white * 0.16
         let prev: Float = hp
         hp = shaped
-        // Moderate differentiator — present, not a needle.
         let high: Float = (hp - prev * 0.72) * 0.85
-
         let body: Float = lp * (0.70 + thump * 1.1)
-        let attack: Float = env > 0.8 ? 1.18 : 1.0
-        let snap: Float = high * 1.05 + body
-        let out: Float = snap * env * amp * attack
-        return out
+        let attack: Float = env > 0.8 ? 1.15 : 1.0
+        return (high * 1.05 + body) * env * amp * attack
     }
 }

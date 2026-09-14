@@ -564,10 +564,6 @@ struct PrototypeControlsView: View {
                 .disabled(!store.audio.isEnabled)
                 .opacity(store.audio.isEnabled ? 1 : 0.45)
             }
-
-            Text(L10n.t("sound.hint"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .padding(16)
         .background(cardBackground)

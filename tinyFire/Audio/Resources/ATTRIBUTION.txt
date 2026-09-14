@@ -1,0 +1,5 @@
+campfire_loop.caf
+Source: "Fireplace Sound loop" by PagDev
+https://opengameart.org/content/fireplace-sound-loop
+License: Creative Commons Zero (CC0 1.0) — public domain dedication
+Processed: mono 44.1 kHz, seamless crossfade wrap for TinyFire hearth bed
