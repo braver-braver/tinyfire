@@ -108,6 +108,7 @@ final class LanguageStore: ObservableObject {
         AppLanguage.current = language
         self.language = language
         revision &+= 1
+        ConsoleWindowOpener.syncTitle()
     }
 
     private func syncFromDefaults() {
@@ -116,6 +117,7 @@ final class LanguageStore: ObservableObject {
             language = next
         }
         revision &+= 1
+        ConsoleWindowOpener.syncTitle()
     }
 }
 
@@ -160,7 +162,7 @@ enum L10n {
         "console.website": "Website",
         "console.contact": "Contact developer",
         "debug.title": "Debug",
-        "debug.hint": "Force flame look. Closing Console hides this again.",
+        "debug.hint": "Force flame look. Closing this window hides debug again.",
         "debug.live": "Live",
         "debug.inject": "Inject tokens",
         "debug.autoBurn": "Auto burn",
@@ -212,6 +214,7 @@ enum L10n {
         "menu.pauseAnimation": "Pause Animation",
         "menu.resumeAnimation": "Resume Animation",
         "menu.quit": "Quit TinyFire",
+        "menu.togglePause": "Pause / Resume Animation",
         "settings.reduceMotion": "Reduce motion",
         "settings.privacy": "Reads local Codex, Claude Code, Cursor, Grok, Pi, and Amp usage. Nothing is uploaded.",
         "tier.hush": "Hush",
@@ -242,13 +245,13 @@ enum L10n {
     private static let zh: [String: String] = [
         "app.name": "TinyFire",
         "app.tagline": "既然都在烧 token，不如真的生一把火。",
-        "console.title": "控制台",
+        "console.title": "面板",
         "console.footnote": "仅读取本机用量日志，不上传。",
         "console.version": "版本 %@",
         "console.website": "官网",
         "console.contact": "联系开发者",
         "debug.title": "调试",
-        "debug.hint": "强制预览火势。关闭控制台后再次打开会重新隐藏。",
+        "debug.hint": "强制预览火势。关闭面板后再次打开会重新隐藏。",
         "debug.live": "恢复实时",
         "debug.inject": "注入用量",
         "debug.autoBurn": "自动添柴",
@@ -295,11 +298,12 @@ enum L10n {
         "menu.hideFlame": "隐藏火焰",
         "menu.showFlame": "显示火焰",
         "menu.resetPosition": "重置到右下角",
-        "menu.openConsole": "打开控制台",
+        "menu.openConsole": "打开面板",
         "menu.checkUpdates": "检查更新…",
         "menu.pauseAnimation": "暂停动画",
         "menu.resumeAnimation": "恢复动画",
         "menu.quit": "退出 TinyFire",
+        "menu.togglePause": "暂停 / 恢复动画",
         "settings.reduceMotion": "减少动态效果",
         "settings.privacy": "读取本机 Codex / Claude Code / Cursor / Grok / Pi / Amp 用量；不上传。",
         "tier.hush": "微火",
@@ -330,13 +334,13 @@ enum L10n {
     private static let ja: [String: String] = [
         "app.name": "TinyFire",
         "app.tagline": "どうせトークンを燃やすなら、本物の火を灯そう。",
-        "console.title": "コンソール",
+        "console.title": "パネル",
         "console.footnote": "ローカルの利用ログのみ読み取ります。アップロードしません。",
         "console.version": "バージョン %@",
         "console.website": "公式サイト",
         "console.contact": "開発者に連絡",
         "debug.title": "デバッグ",
-        "debug.hint": "炎を強制プレビュー。コンソールを閉じると再表示時は隠れます。",
+        "debug.hint": "炎を強制プレビュー。パネルを閉じると再表示時は隠れます。",
         "debug.live": "ライブに戻す",
         "debug.inject": "トークン注入",
         "debug.autoBurn": "自動燃焼",
@@ -383,11 +387,12 @@ enum L10n {
         "menu.hideFlame": "炎を隠す",
         "menu.showFlame": "炎を表示",
         "menu.resetPosition": "位置をリセット",
-        "menu.openConsole": "コンソールを開く",
+        "menu.openConsole": "パネルを開く",
         "menu.checkUpdates": "アップデートを確認…",
         "menu.pauseAnimation": "アニメ一時停止",
         "menu.resumeAnimation": "アニメ再開",
         "menu.quit": "TinyFire を終了",
+        "menu.togglePause": "アニメ一時停止 / 再開",
         "settings.reduceMotion": "動きを減らす",
         "settings.privacy": "Codex / Claude Code / Cursor / Grok / Pi / Amp のローカル利用を読み取ります。アップロードしません。",
         "tier.hush": "静火",
@@ -418,13 +423,13 @@ enum L10n {
     private static let ko: [String: String] = [
         "app.name": "TinyFire",
         "app.tagline": "어차피 토큰을 태울 거라면, 진짜 불을 피우자.",
-        "console.title": "콘솔",
+        "console.title": "패널",
         "console.footnote": "로컬 사용 로그만 읽습니다. 업로드하지 않습니다.",
         "console.version": "버전 %@",
         "console.website": "공식 사이트",
         "console.contact": "개발자에게 연락",
         "debug.title": "디버그",
-        "debug.hint": "불꽃을 강제 미리보기. 콘솔을 닫으면 다시 열 때 숨겨집니다.",
+        "debug.hint": "불꽃을 강제 미리보기. 패널을 닫으면 다시 열 때 숨겨집니다.",
         "debug.live": "실시간으로",
         "debug.inject": "토큰 주입",
         "debug.autoBurn": "자동 연소",
@@ -471,11 +476,12 @@ enum L10n {
         "menu.hideFlame": "불꽃 숨기기",
         "menu.showFlame": "불꽃 보이기",
         "menu.resetPosition": "위치 초기화",
-        "menu.openConsole": "콘솔 열기",
+        "menu.openConsole": "패널 열기",
         "menu.checkUpdates": "업데이트 확인…",
         "menu.pauseAnimation": "애니메이션 일시정지",
         "menu.resumeAnimation": "애니메이션 재개",
         "menu.quit": "TinyFire 종료",
+        "menu.togglePause": "애니메이션 일시정지 / 재개",
         "settings.reduceMotion": "움직임 줄이기",
         "settings.privacy": "Codex / Claude Code / Cursor / Grok / Pi / Amp 로컬 사용량을 읽습니다. 업로드하지 않습니다.",
         "tier.hush": "고요",

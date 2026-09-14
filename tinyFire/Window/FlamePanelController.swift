@@ -31,8 +31,10 @@ final class FlamePanelController: NSObject, ObservableObject {
     private var didBootstrap = false
     private var summaryView: HoverSummaryView?
     private var isHoveringFlame = false
+    private var isDragging = false
     private var lastSummaryRefresh: TimeInterval = 0
     private var lastAppliedSnapshot: FireSnapshot?
+    private var languageBag: AnyCancellable?
 
     enum FlameSize: String, CaseIterable, Identifiable {
         case small, medium, large
@@ -105,12 +107,23 @@ final class FlamePanelController: NSObject, ObservableObject {
 
         container.onHover = { [weak self] hovering in
             guard let self else { return }
+            // Ignore hover chrome while dragging — resizing the panel mid-drag feels like lag.
+            guard !self.isDragging else { return }
             self.setFlameHovering(hovering)
         }
         container.onDrag = { [weak self] delta in
             self?.moveBy(delta: delta)
         }
+        container.onDragEnd = { [weak self] in
+            self?.endDrag()
+        }
         container.menu = makeContextMenu()
+        languageBag = NotificationCenter.default.publisher(for: .appLanguageDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, let container = self.panel?.contentView as? TrackingContainerView else { return }
+                container.menu = self.makeContextMenu()
+            }
 
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
@@ -255,9 +268,9 @@ final class FlamePanelController: NSObject, ObservableObject {
 
     private func makeContextMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: "重置火焰位置", action: #selector(resetPositionAction), keyEquivalent: "")
-        menu.addItem(withTitle: "暂停/恢复动画", action: #selector(togglePauseAction), keyEquivalent: "")
-        menu.addItem(withTitle: "隐藏火焰", action: #selector(hideAction), keyEquivalent: "")
+        menu.addItem(withTitle: L10n.t("menu.resetPosition"), action: #selector(resetPositionAction), keyEquivalent: "")
+        menu.addItem(withTitle: L10n.t("menu.togglePause"), action: #selector(togglePauseAction), keyEquivalent: "")
+        menu.addItem(withTitle: L10n.t("menu.hideFlame"), action: #selector(hideAction), keyEquivalent: "")
         for item in menu.items {
             item.target = self
         }
@@ -326,12 +339,33 @@ final class FlamePanelController: NSObject, ObservableObject {
 
     func moveBy(delta: CGPoint) {
         guard let panel else { return }
-        var frame = panel.frame
-        frame.origin.x += delta.x
-        frame.origin.y += delta.y
-        panel.setFrame(frame, display: true)
-        constrainToVisibleScreen()
-        persistOrigin()
+        beginDragIfNeeded()
+        var origin = panel.frame.origin
+        origin.x += delta.x
+        origin.y += delta.y
+        // Cheap move — no display pass, no UserDefaults, no full constrain each tick.
+        panel.setFrameOrigin(origin)
+    }
+
+    /// Soft-clamp + persist once the user releases the mouse.
+    func endDrag() {
+        guard isDragging else { return }
+        isDragging = false
+        skView?.setDragging(false)
+        constrainToVisibleScreen(persist: true)
+        syncScene()
+    }
+
+    private func beginDragIfNeeded() {
+        guard !isDragging else { return }
+        isDragging = true
+        // Drop flame sim cost while the transparent window is being composited around.
+        skView?.setDragging(true)
+        if isHoveringFlame {
+            isHoveringFlame = false
+            summaryView?.isHidden = true
+            layoutFlameChrome(hovering: false)
+        }
     }
 
     private func placeOnMainScreenBottomTrailing(force: Bool) {
@@ -404,7 +438,11 @@ final class FlamePanelController: NSObject, ObservableObject {
 final class TrackingContainerView: NSView {
     var onHover: ((Bool) -> Void)?
     var onDrag: ((CGPoint) -> Void)?
-    private var lastDragPoint: CGPoint?
+    var onDragEnd: (() -> Void)?
+
+    /// Screen-space mouse anchor — window-relative coords jitter after the panel moves.
+    private var lastScreenPoint: CGPoint?
+    private var isDragging = false
 
     override var isOpaque: Bool { false }
     override var wantsDefaultClipping: Bool { false }
@@ -437,27 +475,40 @@ final class TrackingContainerView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard !isDragging else { return }
         onHover?(true)
     }
 
     override func mouseExited(with event: NSEvent) {
+        guard !isDragging else { return }
         onHover?(false)
     }
 
     override func mouseDown(with event: NSEvent) {
-        lastDragPoint = event.locationInWindow
+        lastScreenPoint = NSEvent.mouseLocation
+        isDragging = false
     }
 
     override func mouseDragged(with event: NSEvent) {
-        let point = event.locationInWindow
-        if let last = lastDragPoint {
-            onDrag?(CGPoint(x: point.x - last.x, y: point.y - last.y))
+        let screen = NSEvent.mouseLocation
+        if let last = lastScreenPoint {
+            let delta = CGPoint(x: screen.x - last.x, y: screen.y - last.y)
+            if !isDragging, hypot(delta.x, delta.y) > 1.5 {
+                isDragging = true
+            }
+            if isDragging, (delta.x != 0 || delta.y != 0) {
+                onDrag?(delta)
+            }
         }
-        lastDragPoint = point
+        lastScreenPoint = screen
     }
 
     override func mouseUp(with event: NSEvent) {
-        lastDragPoint = nil
+        if isDragging {
+            onDragEnd?()
+        }
+        isDragging = false
+        lastScreenPoint = nil
     }
 
     override func draw(_ dirtyRect: NSRect) {

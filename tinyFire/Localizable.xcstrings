@@ -138,7 +138,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "控制台"
+            "value" : "面板"
           }
         }
       }
@@ -328,7 +328,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "打开控制台"
+            "value" : "打开面板"
           }
         }
       }

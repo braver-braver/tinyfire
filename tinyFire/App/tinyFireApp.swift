@@ -31,6 +31,10 @@ struct tinyFireApp: App {
             PrototypeControlsView(store: store)
                 .environment(\.locale, languageStore.language.locale ?? .autoupdatingCurrent)
                 .id(languageStore.revision)
+                .onAppear { ConsoleWindowOpener.syncTitle() }
+                .onChange(of: languageStore.revision) { _, _ in
+                    ConsoleWindowOpener.syncTitle()
+                }
         }
         .defaultSize(width: 460, height: 720)
 
@@ -78,30 +82,34 @@ struct tinyFireApp: App {
 
 private struct MenuBarCommands: View {
     @ObservedObject var store: AppModel
+    @ObservedObject private var languageStore = LanguageStore.shared
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button(store.panel.isVisible ? L10n.t("menu.hideFlame") : L10n.t("menu.showFlame")) {
-            store.panel.toggleVisible()
+        Group {
+            Button(store.panel.isVisible ? L10n.t("menu.hideFlame") : L10n.t("menu.showFlame")) {
+                store.panel.toggleVisible()
+            }
+            Button(L10n.t("menu.resetPosition")) {
+                store.panel.resetPositionToDefault()
+                store.igniteDemoFlameIfNeeded()
+            }
+            Button(L10n.t("menu.openConsole")) {
+                ConsoleWindowOpener.open(using: openWindow)
+            }
+            Button(L10n.t("menu.checkUpdates")) {
+                UpdateChecker.checkForUpdates()
+            }
+            Divider()
+            Button(store.fire.animationPaused ? L10n.t("menu.resumeAnimation") : L10n.t("menu.pauseAnimation")) {
+                store.fire.animationPaused.toggle()
+            }
+            Divider()
+            Button(L10n.t("menu.quit")) {
+                NSApp.terminate(nil)
+            }
         }
-        Button(L10n.t("menu.resetPosition")) {
-            store.panel.resetPositionToDefault()
-            store.igniteDemoFlameIfNeeded()
-        }
-        Button(L10n.t("menu.openConsole")) {
-            ConsoleWindowOpener.open(using: openWindow)
-        }
-        Button(L10n.t("menu.checkUpdates")) {
-            UpdateChecker.checkForUpdates()
-        }
-        Divider()
-        Button(store.fire.animationPaused ? L10n.t("menu.resumeAnimation") : L10n.t("menu.pauseAnimation")) {
-            store.fire.animationPaused.toggle()
-        }
-        Divider()
-        Button(L10n.t("menu.quit")) {
-            NSApp.terminate(nil)
-        }
+        .id(languageStore.revision)
     }
 }
 
@@ -170,10 +178,19 @@ enum ConsoleWindowOpener {
         if window.isMiniaturized {
             window.deminiaturize(nil)
         }
+        window.title = L10n.t("console.title")
+        window.identifier = NSUserInterfaceItemIdentifier("prototype")
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Keep the title bar in sync when the user switches language.
+    static func syncTitle() {
+        guard let window = findConsoleWindow() else { return }
+        window.title = L10n.t("console.title")
+        window.identifier = NSUserInterfaceItemIdentifier("prototype")
     }
 
     /// Windows SwiftUI left behind after close are still in `NSApp.windows`
@@ -186,14 +203,15 @@ enum ConsoleWindowOpener {
     }
 
     static func findConsoleWindow() -> NSWindow? {
-        NSApp.windows.first { window in
-            if window.identifier?.rawValue == "prototype" { return true }
-            let title = window.title
-            return title == "Console"
-                || title == "控制台"
-                || title == "コンソール"
-                || title == "콘솔"
+        // Prefer stable id — title text changes with language.
+        if let byId = NSApp.windows.first(where: { $0.identifier?.rawValue == "prototype" }) {
+            return byId
         }
+        let titles: Set<String> = [
+            L10n.t("console.title"),
+            "Console", "面板", "控制台", "パネル", "コンソール", "패널", "콘솔",
+        ]
+        return NSApp.windows.first { titles.contains($0.title) }
     }
 }
 
