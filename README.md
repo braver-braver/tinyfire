@@ -7,11 +7,12 @@ TinyFire is a floating macOS campfire driven by your local AI coding-tool token 
 
 Nothing is uploaded for usage tracking. Logs stay on your Mac.
 
-![TinyFire](branding/logo-master-1024.png)
+![TinyFire](branding/desktop-hearth-zoom.gif)
 
 ## Download
 
 [**TinyFire-1.1.15.dmg**](https://github.com/wdkwdkwdk/tinyfire/releases/download/v1.1.15/TinyFire-1.1.15.dmg)
+
 ## Features
 
 - Floating pixel campfire on the desktop (draggable, hideable, non-activating)
