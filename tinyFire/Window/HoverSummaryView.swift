@@ -2,7 +2,7 @@
 //  HoverSummaryView.swift
 //  tinyFire
 //
-//  Compact dark card for desktop hover — tokens + per-source rows only.
+//  Compact dark card for desktop hover — today total + optional live tok/s + sources.
 //
 
 import AppKit
@@ -10,17 +10,26 @@ import AppKit
 final class HoverSummaryView: NSView {
     struct Model {
         var todayTokens: Int
+        /// Estimated tokens/sec from recent burn (smoothed). Ignored when showLiveRate is false.
+        var tokensPerSecond: Double
+        var showLiveRate: Bool
         var rows: [(source: UsageSource, tokens: Int, estimated: Bool)]
         var updatedAt: Date?
     }
 
     /// Fixed card width — independent of flame panel size.
-    static let cardWidth: CGFloat = 220
+    static let cardWidth: CGFloat = 248
 
-    private var model = Model(todayTokens: 0, rows: [], updatedAt: nil)
+    private var model = Model(
+        todayTokens: 0,
+        tokensPerSecond: 0,
+        showLiveRate: true,
+        rows: [],
+        updatedAt: nil
+    )
 
-    private let padX: CGFloat = 16
-    private let padY: CGFloat = 14
+    private let padX: CGFloat = 14
+    private let padY: CGFloat = 12
 
     override var isOpaque: Bool { false }
     override var wantsDefaultClipping: Bool { false }
@@ -28,13 +37,17 @@ final class HoverSummaryView: NSView {
     func apply(_ model: Model) {
         let same =
             self.model.todayTokens == model.todayTokens
+            && abs(self.model.tokensPerSecond - model.tokensPerSecond) < 0.05
+            && self.model.showLiveRate == model.showLiveRate
             && self.model.rows.count == model.rows.count
             && zip(self.model.rows, model.rows).allSatisfy {
                 $0.source == $1.source && $0.tokens == $1.tokens && $0.estimated == $1.estimated
             }
             && self.model.updatedAt == model.updatedAt
         if same { return }
-        let sizeChanged = self.model.rows.count != model.rows.count
+        let sizeChanged =
+            self.model.rows.count != model.rows.count
+            || self.model.showLiveRate != model.showLiveRate
         self.model = model
         needsDisplay = true
         if sizeChanged {
@@ -43,61 +56,129 @@ final class HoverSummaryView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
+        let headerH: CGFloat = model.showLiveRate ? 48 : 34
+        let dividerGap: CGFloat = model.rows.isEmpty ? 0 : 10
         let rowH: CGFloat = CGFloat(model.rows.count) * 18
         let updatedH: CGFloat = model.updatedAt == nil ? 0 : 16
-        // header tokens + rows + padding — width never follows flame size
-        return NSSize(width: Self.cardWidth, height: padY * 2 + 34 + rowH + updatedH + 4)
+        return NSSize(
+            width: Self.cardWidth,
+            height: padY * 2 + headerH + dividerGap + rowH + updatedH
+        )
     }
 
     override func draw(_ dirtyRect: NSRect) {
         let bounds = self.bounds.insetBy(dx: 0.5, dy: 0.5)
         let path = NSBezierPath(roundedRect: bounds, xRadius: 12, yRadius: 12)
-        NSColor.black.withAlphaComponent(0.74).setFill()
+        NSColor.black.withAlphaComponent(0.76).setFill()
         path.fill()
         NSColor.white.withAlphaComponent(0.10).setStroke()
         path.lineWidth = 1
         path.stroke()
 
         let content = bounds.insetBy(dx: padX, dy: padY)
-        var y = content.maxY - 18
+        var y = content.maxY - 16
 
-        let token = formatTokens(model.todayTokens)
-        drawText(
-            token,
-            at: NSPoint(x: content.minX, y: y - 2),
-            font: .monospacedDigitSystemFont(ofSize: 22, weight: .semibold),
-            color: .white,
-            width: content.width - 52
-        )
-        drawText(
-            L10n.t("hover.tokens"),
-            at: NSPoint(x: content.maxX - 48, y: y + 2),
-            font: .systemFont(ofSize: 10, weight: .regular),
-            color: NSColor.white.withAlphaComponent(0.45),
-            width: 48,
-            align: .right
-        )
+        if model.showLiveRate {
+            let colGap: CGFloat = 10
+            let leftW = floor(content.width * 0.52)
+            let rightX = content.minX + leftW + colGap
+            let rightW = content.width - leftW - colGap
 
-        y -= 10
+            let todayText = formatTokens(model.todayTokens)
+            let rateText = formatRate(model.tokensPerSecond)
+            let todayFont = fittedMonoFont(for: todayText, maxSize: 20, minSize: 13, width: leftW)
+            let rateFont = fittedMonoFont(for: rateText, maxSize: 20, minSize: 13, width: rightW)
+
+            drawText(
+                todayText,
+                at: NSPoint(x: content.minX, y: y - 2),
+                font: todayFont,
+                color: .white,
+                width: leftW
+            )
+            drawText(
+                L10n.t("hover.today"),
+                at: NSPoint(x: content.minX, y: y - 18),
+                font: .systemFont(ofSize: 9, weight: .medium),
+                color: NSColor.white.withAlphaComponent(0.38),
+                width: leftW
+            )
+
+            let rateColor: NSColor = model.tokensPerSecond > 0
+                ? NSColor(calibratedRed: 1.0, green: 0.72, blue: 0.38, alpha: 1)
+                : NSColor.white.withAlphaComponent(0.55)
+            drawText(
+                rateText,
+                at: NSPoint(x: rightX, y: y - 2),
+                font: rateFont,
+                color: rateColor,
+                width: rightW,
+                align: .right
+            )
+            drawText(
+                L10n.t("hover.rate"),
+                at: NSPoint(x: rightX, y: y - 18),
+                font: .systemFont(ofSize: 9, weight: .medium),
+                color: NSColor.white.withAlphaComponent(0.38),
+                width: rightW,
+                align: .right
+            )
+            y -= 40
+        } else {
+            let todayText = formatTokens(model.todayTokens)
+            let valueW = content.width * 0.62
+            let labelW = content.width - valueW - 6
+            let todayFont = fittedMonoFont(for: todayText, maxSize: 22, minSize: 14, width: valueW)
+            drawText(
+                todayText,
+                at: NSPoint(x: content.minX, y: y - 2),
+                font: todayFont,
+                color: .white,
+                width: valueW
+            )
+            drawText(
+                L10n.t("hover.tokens"),
+                at: NSPoint(x: content.maxX - labelW, y: y + 2),
+                font: .systemFont(ofSize: 10, weight: .regular),
+                color: NSColor.white.withAlphaComponent(0.45),
+                width: labelW,
+                align: .right
+            )
+            y -= 26
+        }
+
+        if !model.rows.isEmpty {
+            let rule = NSBezierPath()
+            rule.move(to: NSPoint(x: content.minX, y: y + 6))
+            rule.line(to: NSPoint(x: content.maxX, y: y + 6))
+            NSColor.white.withAlphaComponent(0.08).setStroke()
+            rule.lineWidth = 1
+            rule.stroke()
+            y -= 4
+        }
+
         for row in model.rows {
             y -= 18
             let dot = NSBezierPath(ovalIn: NSRect(x: content.minX, y: y + 4, width: 6, height: 6))
             SourceFlameColors.nsColor(for: row.source).withAlphaComponent(0.95).setFill()
             dot.fill()
             let suffix = row.estimated ? " · \(L10n.t("hover.estimated"))" : ""
+            let nameW = content.width * 0.58
+            let valueW = content.width - nameW - 12
+            let valueText = formatTokens(row.tokens)
             drawText(
                 row.source.displayName + suffix,
                 at: NSPoint(x: content.minX + 12, y: y),
                 font: .systemFont(ofSize: 11, weight: .regular),
                 color: NSColor.white.withAlphaComponent(0.58),
-                width: content.width * 0.55
+                width: nameW - 12
             )
             drawText(
-                formatTokens(row.tokens),
-                at: NSPoint(x: content.midX, y: y),
-                font: .monospacedDigitSystemFont(ofSize: 11, weight: .medium),
+                valueText,
+                at: NSPoint(x: content.minX + nameW, y: y),
+                font: fittedMonoFont(for: valueText, maxSize: 11, minSize: 9, width: valueW),
                 color: NSColor.white.withAlphaComponent(0.88),
-                width: content.width * 0.5 - 4,
+                width: valueW,
                 align: .right
             )
         }
@@ -128,7 +209,7 @@ final class HoverSummaryView: NSView {
     ) {
         let style = NSMutableParagraphStyle()
         style.alignment = align
-        style.lineBreakMode = .byTruncatingTail
+        style.lineBreakMode = .byClipping
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: color,
@@ -140,6 +221,23 @@ final class HoverSummaryView: NSView {
         )
     }
 
+    private func fittedMonoFont(
+        for string: String,
+        maxSize: CGFloat,
+        minSize: CGFloat,
+        width: CGFloat,
+        weight: NSFont.Weight = .semibold
+    ) -> NSFont {
+        var size = maxSize
+        while size > minSize {
+            let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+            let measured = (string as NSString).size(withAttributes: [.font: font]).width
+            if measured <= width { return font }
+            size -= 0.5
+        }
+        return .monospacedDigitSystemFont(ofSize: minSize, weight: weight)
+    }
+
     private func formatTokens(_ value: Int) -> String {
         if value >= 1_000_000 {
             return String(format: "%.1fM", Double(value) / 1_000_000)
@@ -148,5 +246,17 @@ final class HoverSummaryView: NSView {
             return String(format: "%.1fK", Double(value) / 1_000)
         }
         return value.formatted()
+    }
+
+    /// Digits only; unit lives in the subtitle so long values can shrink cleanly.
+    private func formatRate(_ tps: Double) -> String {
+        if tps < 0.2 {
+            return "0"
+        }
+        if tps >= 100 {
+            return String(format: "~%.0f", tps)
+        }
+        // One decimal so organic jitter is visible while hovering.
+        return String(format: "~%.1f", tps)
     }
 }

@@ -153,6 +153,8 @@ final class FireStateMachine: ObservableObject {
     @Published private(set) var liveSnapshot: FireSnapshot = .extinguished
     @Published private(set) var todayTokens: Int = 0
     @Published private(set) var todayBySource: [UsageSource: Int] = [:]
+    /// Rough live burn rate (tokens/sec) from recent inflows — estimate, smoothed for display.
+    @Published private(set) var tokensPerSecond: Double = 0
     /// Smoothed mix shown in console / flame (0…1 per source).
     @Published private(set) var displayedColorMix: FlameColorMix = .classic
     @Published var previewStyle: FirePreviewStyle? = nil
@@ -171,7 +173,16 @@ final class FireStateMachine: ObservableObject {
     /// Live burn rate only — daily 底火 is applied at compose time.
     private var burnIntensity: Double = 0
     private var smoothedWeights: [UsageSource: Double] = [:]
+    private var smoothedTokensPerSecond: Double = 0
+    /// Organic wander on top of the estimate so the hover number feels alive.
+    private var rateJitter: Double = 0
+    private var rateNoisePhase: Double = Double.random(in: 0...(2 * .pi))
     private var colorObserver: NSObjectProtocol?
+
+    /// Per-event credit for hover rate (lower than flame credit → less absurd tok/s).
+    private let rateEventCreditTokens: Double = 15_000
+    /// Hard ceiling for displayed tok/s.
+    private let rateDisplayCapTPS: Double = 320
 
     func start() {
         guard timer == nil else { return }
@@ -258,6 +269,7 @@ final class FireStateMachine: ObservableObject {
 
         recentInflows.append((date, tokens, source))
         pruneInflows(now: date)
+        updateTokensPerSecond(now: date, dt: 0.35)
 
         let compressed = Self.softCompress(tokens)
         let fuelGain = min(0.55, compressed / tuning.fuelTokenScale)
@@ -295,6 +307,9 @@ final class FireStateMachine: ObservableObject {
         recentInflows.removeAll()
         burnIntensity = 0
         smoothedWeights = [:]
+        smoothedTokensPerSecond = 0
+        rateJitter = 0
+        tokensPerSecond = 0
         displayedColorMix = .classic
         liveSnapshot = .extinguished
         lastTick = .now
@@ -309,9 +324,11 @@ final class FireStateMachine: ObservableObject {
     }
 
     private func advance(by dt: TimeInterval) {
-        pruneInflows(now: .now)
+        let now = Date()
+        pruneInflows(now: now)
+        updateTokensPerSecond(now: now, dt: dt)
 
-        let target = targetIntensity(now: .now)
+        let target = targetIntensity(now: now)
         var fuel = liveSnapshot.fuel
         var ember = liveSnapshot.emberHeat
         var spark = liveSnapshot.sparkBurst
@@ -349,6 +366,71 @@ final class FireStateMachine: ObservableObject {
                 colorMix: displayedColorMix
             )
         )
+    }
+
+    /// Same inflow window as the flame, plus intensity→tok/s so a roaring fire never reads 0.
+    private func updateTokensPerSecond(now: Date, dt: TimeInterval) {
+        let window = max(1.0, tuning.intensityWindowSeconds)
+        let credited = recentInflows.reduce(0.0) { $0 + min($1.tokens, rateEventCreditTokens) }
+        let fromInflows = credited / window
+        let fromFlame = tokensPerSecondMatchingFlame(burnIntensity)
+        let instant = min(rateDisplayCapTPS, max(fromInflows, fromFlame))
+
+        let tau = instant > smoothedTokensPerSecond ? 0.9 : 2.8
+        let alpha = 1.0 - exp(-dt / max(0.05, tau))
+        smoothedTokensPerSecond += (instant - smoothedTokensPerSecond) * alpha
+
+        if burnIntensity < 0.04 {
+            smoothedTokensPerSecond = 0
+            rateJitter = 0
+            if tokensPerSecond != 0 { tokensPerSecond = 0 }
+            return
+        }
+
+        // Gentle multi-frequency wander (±8–14%) so the estimate ticks while burning.
+        rateNoisePhase += dt
+        let base = max(0.5, smoothedTokensPerSecond)
+        let amp = max(0.6, base * (0.08 + 0.04 * burnIntensity))
+        let wander =
+            sin(rateNoisePhase * 1.65) * amp * 0.50
+            + sin(rateNoisePhase * 0.41 + 1.3) * amp * 0.32
+            + sin(rateNoisePhase * 3.1 + 0.4) * amp * 0.12
+            + Double.random(in: -1...1) * amp * 0.18
+        let jitterTau = 0.35
+        let jitterAlpha = 1.0 - exp(-dt / jitterTau)
+        rateJitter += (wander - rateJitter) * jitterAlpha
+
+        let displayed = min(
+            rateDisplayCapTPS,
+            max(0.2, smoothedTokensPerSecond + rateJitter)
+        )
+        let rounded = (displayed * 10).rounded() / 10
+        if abs(rounded - tokensPerSecond) >= 0.05 || (rounded == 0) != (tokensPerSecond == 0) {
+            tokensPerSecond = rounded
+        }
+    }
+
+    /// Invert flame TPM anchors so displayed rate tracks visible burn intensity.
+    private func tokensPerSecondMatchingFlame(_ intensity: Double) -> Double {
+        guard intensity > 0.04 else { return 0 }
+        return tpm(matchingIntensity: intensity) / 60.0
+    }
+
+    private func tpm(matchingIntensity intensity: Double) -> Double {
+        let anchors = tuning.tpmAnchors
+        guard let first = anchors.first, let last = anchors.last else { return 0 }
+        if intensity <= first.intensity { return first.tpm }
+        if intensity >= last.intensity { return last.tpm }
+        for i in 0..<(anchors.count - 1) {
+            let a = anchors[i]
+            let b = anchors[i + 1]
+            if intensity <= b.intensity {
+                let span = max(0.0001, b.intensity - a.intensity)
+                let t = (intensity - a.intensity) / span
+                return a.tpm + (b.tpm - a.tpm) * t
+            }
+        }
+        return last.tpm
     }
 
     /// Tokens/minute → intensity via uneven anchors (中火易、大火次之、烈火难).

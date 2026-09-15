@@ -11,7 +11,7 @@ Nothing is uploaded for usage tracking. Logs stay on your Mac.
 
 ## Download
 
-[**TinyFire-1.1.15.dmg**](https://github.com/wdkwdkwdk/tinyfire/releases/download/v1.1.15/TinyFire-1.1.15.dmg)
+[**TinyFire-1.1.16.dmg**](https://github.com/wdkwdkwdk/tinyfire/releases/download/v1.1.16/TinyFire-1.1.16.dmg)
 
 ## Features
 

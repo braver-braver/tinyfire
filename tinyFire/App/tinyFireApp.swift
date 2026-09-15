@@ -56,6 +56,16 @@ struct tinyFireApp: App {
                     get: { store.audio.isEnabled },
                     set: { store.audio.isEnabled = $0 }
                 ))
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle(L10n.t("settings.showLiveRate"), isOn: Binding(
+                        get: { store.showLiveRate },
+                        set: { store.showLiveRate = $0 }
+                    ))
+                    Text(L10n.t("settings.showLiveRate.hint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text(L10n.t("settings.privacy"))
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -170,7 +170,8 @@ final class FlamePanelController: NSObject, ObservableObject {
         lastAppliedSnapshot = snap
         if isHoveringFlame {
             let now = ProcessInfo.processInfo.systemUptime
-            if now - lastSummaryRefresh >= 0.5 {
+            // Keep the rate digits ticking while the card is open.
+            if now - lastSummaryRefresh >= 0.12 {
                 lastSummaryRefresh = now
                 refreshSummary()
             }
@@ -259,6 +260,8 @@ final class FlamePanelController: NSObject, ObservableObject {
         summaryView.apply(
             HoverSummaryView.Model(
                 todayTokens: store.monitor.todayTokens,
+                tokensPerSecond: store.showLiveRate ? store.fire.tokensPerSecond : 0,
+                showLiveRate: store.showLiveRate,
                 rows: rows.map { (source: $0.0, tokens: $0.1, estimated: $0.2) },
                 updatedAt: store.monitor.statuses.compactMap(\.lastReadAt).max()
             )

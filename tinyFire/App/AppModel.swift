@@ -18,6 +18,13 @@ final class AppModel: ObservableObject {
 
     @Published var hasOpenedPrototypeOnce: Bool = false
     @Published var hasCompletedOnboarding: Bool = UserDefaults.standard.bool(forKey: "onboarding.done")
+    /// Show estimated tok/s on the desktop hover card.
+    @Published var showLiveRate: Bool = {
+        if UserDefaults.standard.object(forKey: "hover.showLiveRate") == nil { return true }
+        return UserDefaults.standard.bool(forKey: "hover.showLiveRate")
+    }() {
+        didSet { UserDefaults.standard.set(showLiveRate, forKey: "hover.showLiveRate") }
+    }
 
     private var cancellables = Set<AnyCancellable>()
 

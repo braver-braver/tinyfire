@@ -35,6 +35,7 @@ struct PrototypeControlsView: View {
                 sourcesSection
                 sizeSection
                 soundSection
+                hoverSection
                 if showDebug {
                     debugSection
                 }
@@ -564,6 +565,30 @@ struct PrototypeControlsView: View {
                 .disabled(!store.audio.isEnabled)
                 .opacity(store.audio.isEnabled ? 1 : 0.45)
             }
+        }
+        .padding(16)
+        .background(cardBackground)
+    }
+
+    // MARK: - Hover card
+
+    private var hoverSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle(L10n.t("hover.settings.title"))
+
+            Toggle(isOn: Binding(
+                get: { store.showLiveRate },
+                set: { store.showLiveRate = $0 }
+            )) {
+                Text(L10n.t("settings.showLiveRate"))
+                    .font(.subheadline)
+            }
+            .toggleStyle(.switch)
+
+            Text(L10n.t("settings.showLiveRate.hint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
         .background(cardBackground)
