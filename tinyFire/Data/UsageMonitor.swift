@@ -78,6 +78,7 @@ final class UsageMonitor: ObservableObject {
         let watermark = Int64(store.meta("cursor.watermark") ?? "0") ?? 0
         let wantCodex = status(for: .codex)?.state == .ok
         let wantClaude = status(for: .claudeCode)?.state == .ok
+        let wantZCode = status(for: .zcode)?.state == .ok
         let wantCursor = status(for: .cursor)?.state == .ok
         let wantGrok = status(for: .grok)?.state == .ok
         let wantPi = status(for: .pi)?.state == .ok
@@ -109,6 +110,9 @@ final class UsageMonitor: ObservableObject {
                         ClaudeCodeLogAdapter.parseLine($0, file: file)
                     })
                 }
+            }
+            if wantZCode {
+                collected.append(contentsOf: ZCodeLogAdapter.readUsage(since: fileSince))
             }
             if wantGrok {
                 for file in GrokLogAdapter.discoverLogFiles(modifiedSince: fileSince) {
@@ -157,6 +161,7 @@ final class UsageMonitor: ObservableObject {
                 touched: [
                     .codex: wantCodex,
                     .claudeCode: wantClaude,
+                    .zcode: wantZCode,
                     .cursor: wantCursor,
                     .grok: wantGrok,
                     .pi: wantPi,
@@ -301,6 +306,7 @@ final class UsageMonitor: ObservableObject {
         let pairs: [(UsageSource, (SourceConnectionState, String))] = [
             (.claudeCode, ClaudeCodeLogAdapter.connectionState()),
             (.codex, CodexLogAdapter.connectionState()),
+            (.zcode, ZCodeLogAdapter.connectionState()),
             (.cursor, cursorConn),
             (.grok, GrokLogAdapter.connectionState()),
             (.pi, PiLogAdapter.connectionState()),
