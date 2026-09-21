@@ -16,6 +16,7 @@ enum SourceFlameColors {
     static let builtIn: [UsageSource: (r: Double, g: Double, b: Double)] = [
         .claudeCode: (0.91, 0.47, 0.18), // orange
         .codex: (0.28, 0.72, 0.42),      // green
+        .zcode: (0.42, 0.48, 0.95),      // indigo
         .cursor: (0.32, 0.56, 0.92),     // blue
         .grok: (0.72, 0.42, 0.95),       // violet
         .pi: (0.95, 0.62, 0.22),         // amber
