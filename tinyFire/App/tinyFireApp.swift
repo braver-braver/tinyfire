@@ -281,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    @MainActor
     private func attemptFirstConsoleOpen(attempt: Int) {
         if ConsoleWindowOpener.open() {
             return
