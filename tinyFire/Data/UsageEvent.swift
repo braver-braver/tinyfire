@@ -8,6 +8,7 @@ import Foundation
 enum UsageSource: String, Codable, CaseIterable, Identifiable {
     case claudeCode = "claude_code"
     case codex = "codex"
+    case zcode = "zcode"
     case cursor = "cursor"
     case grok = "grok"
     case pi = "pi"
@@ -20,6 +21,7 @@ enum UsageSource: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .claudeCode: return "Claude Code"
         case .codex: return "Codex"
+        case .zcode: return "ZCode"
         case .cursor: return "Cursor"
         case .grok: return "Grok"
         case .pi: return "Pi"
