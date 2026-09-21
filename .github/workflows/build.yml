@@ -50,3 +50,66 @@ jobs:
           name: xcodebuild-log
           path: xcodebuild.log
           if-no-files-found: ignore
+
+      - name: Build unsigned Release app
+        run: |
+          set -o pipefail
+          DERIVED_DATA="$RUNNER_TEMP/TinyFireDerivedData"
+          xcodebuild \
+            -project tinyFire.xcodeproj \
+            -scheme tinyFire \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build | tee xcodebuild-release.log
+
+          APP="$DERIVED_DATA/Build/Products/Release/tinyFire.app"
+          test -d "$APP"
+
+          # Ad-hoc signing is sufficient for a local test build. It is not notarization.
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+
+      - name: Package test DMG
+        run: |
+          set -euo pipefail
+          DERIVED_DATA="$RUNNER_TEMP/TinyFireDerivedData"
+          APP="$DERIVED_DATA/Build/Products/Release/tinyFire.app"
+          STAGE="$RUNNER_TEMP/tinyfire-dmg-stage"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          rm -rf "$STAGE" dist
+          mkdir -p "$STAGE" dist
+
+          ditto "$APP" "$STAGE/TinyFire.app"
+          ln -s /Applications "$STAGE/Applications"
+
+          hdiutil create \
+            -volname "TinyFire ZCode Test" \
+            -srcfolder "$STAGE" \
+            -ov \
+            -format UDZO \
+            "dist/TinyFire-ZCode-test-${SHORT_SHA}.dmg"
+
+          shasum -a 256 "dist/TinyFire-ZCode-test-${SHORT_SHA}.dmg" \
+            | tee "dist/TinyFire-ZCode-test-${SHORT_SHA}.dmg.sha256"
+
+      - name: Upload test DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: TinyFire-ZCode-test-${{ github.sha }}
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload Release build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-release-log
+          path: xcodebuild-release.log
+          if-no-files-found: ignore
