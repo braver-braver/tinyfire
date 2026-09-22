@@ -12,6 +12,8 @@ final class HoverSummaryView: NSView {
         var todayTokens: Int
         /// Estimated tokens/sec from recent burn (smoothed). Ignored when showLiveRate is false.
         var tokensPerSecond: Double
+        /// Source-specific live rates. Used when multiple tools are active concurrently.
+        var rates: [(source: UsageSource, tokensPerSecond: Double)]
         var showLiveRate: Bool
         var rows: [(source: UsageSource, tokens: Int, estimated: Bool)]
         var updatedAt: Date?
@@ -23,6 +25,7 @@ final class HoverSummaryView: NSView {
     private var model = Model(
         todayTokens: 0,
         tokensPerSecond: 0,
+        rates: [],
         showLiveRate: true,
         rows: [],
         updatedAt: nil
@@ -38,6 +41,10 @@ final class HoverSummaryView: NSView {
         let same =
             self.model.todayTokens == model.todayTokens
             && abs(self.model.tokensPerSecond - model.tokensPerSecond) < 0.05
+            && self.model.rates.count == model.rates.count
+            && zip(self.model.rates, model.rates).allSatisfy {
+                $0.source == $1.source && abs($0.tokensPerSecond - $1.tokensPerSecond) < 0.05
+            }
             && self.model.showLiveRate == model.showLiveRate
             && self.model.rows.count == model.rows.count
             && zip(self.model.rows, model.rows).allSatisfy {
@@ -56,7 +63,8 @@ final class HoverSummaryView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        let headerH: CGFloat = model.showLiveRate ? 48 : 34
+        let liveRateRows = model.showLiveRate ? max(1, model.rates.count) : 0
+        let headerH: CGFloat = model.showLiveRate ? max(48, CGFloat(liveRateRows) * 18 + 22) : 34
         let dividerGap: CGFloat = model.rows.isEmpty ? 0 : 10
         let rowH: CGFloat = CGFloat(model.rows.count) * 18
         let updatedH: CGFloat = model.updatedAt == nil ? 0 : 16
@@ -85,9 +93,7 @@ final class HoverSummaryView: NSView {
             let rightW = content.width - leftW - colGap
 
             let todayText = formatTokens(model.todayTokens)
-            let rateText = formatRate(model.tokensPerSecond)
             let todayFont = fittedMonoFont(for: todayText, maxSize: 20, minSize: 13, width: leftW)
-            let rateFont = fittedMonoFont(for: rateText, maxSize: 20, minSize: 13, width: rightW)
 
             drawText(
                 todayText,
@@ -104,26 +110,66 @@ final class HoverSummaryView: NSView {
                 width: leftW
             )
 
-            let rateColor: NSColor = model.tokensPerSecond > 0
-                ? NSColor(calibratedRed: 1.0, green: 0.72, blue: 0.38, alpha: 1)
-                : NSColor.white.withAlphaComponent(0.55)
-            drawText(
-                rateText,
-                at: NSPoint(x: rightX, y: y - 2),
-                font: rateFont,
-                color: rateColor,
-                width: rightW,
-                align: .right
-            )
-            drawText(
-                L10n.t("hover.rate"),
-                at: NSPoint(x: rightX, y: y - 18),
-                font: .systemFont(ofSize: 9, weight: .medium),
-                color: NSColor.white.withAlphaComponent(0.38),
-                width: rightW,
-                align: .right
-            )
-            y -= 40
+            if model.rates.count <= 1 {
+                let source = model.rates.first?.source
+                let value = model.rates.first?.tokensPerSecond ?? model.tokensPerSecond
+                let rateText = formatRate(value)
+                let rateFont = fittedMonoFont(for: rateText, maxSize: 20, minSize: 13, width: rightW)
+                let rateColor = source.map(SourceFlameColors.nsColor(for:))
+                    ?? (value > 0
+                        ? NSColor(calibratedRed: 1.0, green: 0.72, blue: 0.38, alpha: 1)
+                        : NSColor.white.withAlphaComponent(0.55))
+
+                drawText(
+                    rateText,
+                    at: NSPoint(x: rightX, y: y - 2),
+                    font: rateFont,
+                    color: rateColor,
+                    width: rightW,
+                    align: .right
+                )
+                drawText(
+                    source?.displayName ?? L10n.t("hover.rate"),
+                    at: NSPoint(x: rightX, y: y - 18),
+                    font: .systemFont(ofSize: 9, weight: .medium),
+                    color: NSColor.white.withAlphaComponent(0.38),
+                    width: rightW,
+                    align: .right
+                )
+                y -= 40
+            } else {
+                var rateY = y + 1
+                for item in model.rates {
+                    let valueText = formatRate(item.tokensPerSecond)
+                    let nameW = floor(rightW * 0.50)
+                    let valueW = rightW - nameW - 4
+                    drawText(
+                        item.source.displayName,
+                        at: NSPoint(x: rightX, y: rateY - 1),
+                        font: .systemFont(ofSize: 10, weight: .medium),
+                        color: SourceFlameColors.nsColor(for: item.source).withAlphaComponent(0.95),
+                        width: nameW
+                    )
+                    drawText(
+                        valueText,
+                        at: NSPoint(x: rightX + nameW + 4, y: rateY - 1),
+                        font: fittedMonoFont(for: valueText, maxSize: 12, minSize: 9, width: valueW),
+                        color: SourceFlameColors.nsColor(for: item.source),
+                        width: valueW,
+                        align: .right
+                    )
+                    rateY -= 18
+                }
+                drawText(
+                    L10n.t("hover.rate"),
+                    at: NSPoint(x: rightX, y: rateY - 1),
+                    font: .systemFont(ofSize: 9, weight: .medium),
+                    color: NSColor.white.withAlphaComponent(0.38),
+                    width: rightW,
+                    align: .right
+                )
+                y -= max(40, CGFloat(model.rates.count) * 18 + 14)
+            }
         } else {
             let todayText = formatTokens(model.todayTokens)
             let valueW = content.width * 0.62
