@@ -54,6 +54,7 @@ final class HoverSummaryView: NSView {
         if same { return }
         let sizeChanged =
             self.model.rows.count != model.rows.count
+            || self.model.rates.count != model.rates.count
             || self.model.showLiveRate != model.showLiveRate
         self.model = model
         needsDisplay = true
