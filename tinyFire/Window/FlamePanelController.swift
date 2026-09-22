@@ -261,6 +261,12 @@ final class FlamePanelController: NSObject, ObservableObject {
             HoverSummaryView.Model(
                 todayTokens: store.monitor.todayTokens,
                 tokensPerSecond: store.showLiveRate ? store.fire.tokensPerSecond : 0,
+                rates: store.showLiveRate
+                    ? UsageSource.allCases.compactMap { source in
+                        guard let rate = store.fire.tokensPerSecondBySource[source], rate > 0 else { return nil }
+                        return (source: source, tokensPerSecond: rate)
+                    }
+                    : [],
                 showLiveRate: store.showLiveRate,
                 rows: rows.map { (source: $0.0, tokens: $0.1, estimated: $0.2) },
                 updatedAt: store.monitor.statuses.compactMap(\.lastReadAt).max()
