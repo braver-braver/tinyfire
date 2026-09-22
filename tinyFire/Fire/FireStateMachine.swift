@@ -155,6 +155,9 @@ final class FireStateMachine: ObservableObject {
     @Published private(set) var todayBySource: [UsageSource: Int] = [:]
     /// Rough live burn rate (tokens/sec) from recent inflows — estimate, smoothed for display.
     @Published private(set) var tokensPerSecond: Double = 0
+    /// Live rate split by source. Values sum approximately to tokensPerSecond.
+    /// Uses the same recent-inflow window as the flame so rate colors and flame colors stay aligned.
+    @Published private(set) var tokensPerSecondBySource: [UsageSource: Double] = [:]
     /// Smoothed mix shown in console / flame (0…1 per source).
     @Published private(set) var displayedColorMix: FlameColorMix = .classic
     @Published var previewStyle: FirePreviewStyle? = nil
@@ -310,6 +313,7 @@ final class FireStateMachine: ObservableObject {
         smoothedTokensPerSecond = 0
         rateJitter = 0
         tokensPerSecond = 0
+        tokensPerSecondBySource = [:]
         displayedColorMix = .classic
         liveSnapshot = .extinguished
         lastTick = .now
@@ -384,6 +388,7 @@ final class FireStateMachine: ObservableObject {
             smoothedTokensPerSecond = 0
             rateJitter = 0
             if tokensPerSecond != 0 { tokensPerSecond = 0 }
+            if !tokensPerSecondBySource.isEmpty { tokensPerSecondBySource = [:] }
             return
         }
 
@@ -408,6 +413,38 @@ final class FireStateMachine: ObservableObject {
         if abs(rounded - tokensPerSecond) >= 0.05 || (rounded == 0) != (tokensPerSecond == 0) {
             tokensPerSecond = rounded
         }
+
+        let split = sourceRates(displayedTotal: rounded)
+        if split != tokensPerSecondBySource {
+            tokensPerSecondBySource = split
+        }
+    }
+
+    /// Split the displayed total rate across recently active sources.
+    ///
+    /// Allocation uses credited token inflow in the same rolling window as the flame.
+    /// This keeps concurrent source rates additive and visually consistent with flame identity.
+    private func sourceRates(displayedTotal: Double) -> [UsageSource: Double] {
+        guard displayedTotal > 0 else { return [:] }
+
+        var credits: [UsageSource: Double] = [:]
+        for item in recentInflows {
+            guard let source = item.source else { continue }
+            credits[source, default: 0] += min(item.tokens, rateEventCreditTokens)
+        }
+
+        let totalCredit = credits.values.reduce(0, +)
+        guard totalCredit > 0 else { return [:] }
+
+        var rates: [UsageSource: Double] = [:]
+        for (source, credit) in credits where credit > 0 {
+            let value = displayedTotal * (credit / totalCredit)
+            let rounded = (value * 10).rounded() / 10
+            if rounded > 0 {
+                rates[source] = rounded
+            }
+        }
+        return rates
     }
 
     /// Invert flame TPM anchors so displayed rate tracks visible burn intensity.
